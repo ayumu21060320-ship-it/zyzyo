@@ -72,10 +72,10 @@ namespace StandArena
         {
             switch (k)
             {
-                case MoveKind.Attack: return "ATTACK 通常攻撃";
-                case MoveKind.Charge: return "CHARGE 溜め";
-                case MoveKind.Guard: return "GUARD 防御";
-                default: return "SPECIAL 必殺";
+                case MoveKind.Attack: return "K  スタンド攻撃";
+                case MoveKind.Charge: return "I  溜め（長押し）";
+                case MoveKind.Guard: return "ガード（後ろ入力）";
+                default: return "L  必殺技";
             }
         }
     }
