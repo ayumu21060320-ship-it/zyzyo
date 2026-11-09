@@ -9,7 +9,7 @@ using Random = UnityEngine.Random;
 namespace StandArena
 {
     /// <summary>
-    /// The whole game: screens, flow and battle UI.
+    /// The menus: title, quiz, stand card and the screens around the fight.
     /// Created automatically on play (see Bootstrap), so it works from an empty scene.
     /// </summary>
     public class GameUI : MonoBehaviour
@@ -28,9 +28,6 @@ namespace StandArena
         readonly List<Option> answers = new List<Option>();
         string freeText = "";
         Stand me, enemy;
-        Battle battle;
-        bool busy;
-        bool narrate = true;
         string note;                 // one-off message shown on the next screen
         Text genStatus;
 
@@ -401,135 +398,39 @@ namespace StandArena
             UIKit.Eyebrow(col, "ENEMY STAND", Pal.Rose);
             StandCard(enemy, true);
             StatsBlock(enemy);
+            var how = UIKit.Panel(col, 8);
+            UIKit.Label(how, "操作方法", 26, Pal.Text, FontStyle.Bold);
+            UIKit.Label(how,
+                "A / D：移動　　W（Space）：ジャンプ　　S：しゃがむ　　相手と逆方向を押す：ガード\n" +
+                $"J：弱攻撃　　K：スタンド攻撃「{me.moves.attack.name}」　　L：必殺技「{me.moves.special.name}」（SPゲージ50を使う）\n" +
+                $"I 長押し：溜め「{me.moves.charge.name}」でSPゲージを貯める　　ガード時は「{me.moves.guard.name}」\n" +
+                (me.stats.range >= 3 ? "あなたの必殺技は射程が長いので「飛び道具」です。" : "あなたの必殺技は射程が短いので「突進ラッシュ」です。") +
+                "　HPが3割を切ると覚醒して攻撃力が上がります。Escで中断。", 20, Pal.Muted);
+            UIKit.Label(how, "2人対戦の2P：←→ 移動　↑ ジャンプ　↓ しゃがむ　テンキー1/2/3（または , . /）で弱・スタンド・必殺、テンキー4（または ;）で溜め", 18, Pal.Muted);
+
             var row = UIKit.HStack(col, 12);
-            UIKit.Btn(row, "バトル開始", StartBattle);
+            UIKit.Btn(row, "CPUと対戦", () => StartBattle(false));
+            UIKit.Btn(row, "2人で対戦（同じPC）", () => StartBattle(true), primary: false);
             UIKit.Btn(row, "やめる", () => Show(ResultScreen), primary: false);
         }
 
-        // ------------------------------------------------------------ battle
+        // ------------------------------------------------------------ fight
 
-        void StartBattle()
+        bool lastTwoPlayer;
+
+        void StartBattle(bool twoPlayer)
         {
-            battle = new Battle(me, enemy);
-            busy = false;
-            Show(BattleScreen);
-        }
-
-        void FighterPanel(Transform parent, Fighter f, bool player)
-        {
-            var accent = player ? Pal.Cyan : Pal.Rose;
-            var p = UIKit.Flex(UIKit.VStack(parent, 8, 18, Pal.Panel));
-            var strip = UIKit.New("Strip", p);
-            UIKit.Bg(strip, accent);
-            strip.gameObject.AddComponent<LayoutElement>().preferredHeight = 6;
-
-            UIKit.SigilImage(p, SigilOf(f.s), 150);
-            UIKit.Label(p, f.s.owner, 18, Pal.Muted);
-            UIKit.Label(p, f.s.name, 28, Pal.Text, FontStyle.Bold);
-            UIKit.Bar(p, f.Ratio, accent, 16);
-            var hpRow = UIKit.HStack(p, 8);
-            var hpText = UIKit.Label(hpRow, $"HP {f.hp} / {f.max}", 20, Pal.Muted);
-            hpText.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1;
-            if (f.lastDelta != 0)
-                UIKit.Label(hpRow, f.lastDelta > 0 ? $"-{f.lastDelta}" : $"+{-f.lastDelta}", 28,
-                    f.lastDelta > 0 ? Pal.Rose : Pal.Cyan, FontStyle.Bold, TextAnchor.MiddleRight);
-
-            var chips = new List<string>();
-            if (f.charge) chips.Add("<color=#ffc93c>溜め</color>");
-            if (f.awake) chips.Add("<color=#ffc93c>覚醒</color>");
-            chips.Add(f.cd == 0 ? "<color=#ffc93c>必殺OK</color>" : $"必殺あと{f.cd}");
-            UIKit.Label(p, string.Join("  ", chips), 18, Pal.Muted, FontStyle.Bold);
-        }
-
-        void BattleScreen()
-        {
-            var b = battle;
-            var head = UIKit.HStack(col, 12);
-            var ey = UIKit.Eyebrow(head, b.over != Outcome.None ? "BATTLE OVER" : $"TURN {b.turn}");
-            ey.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1;
-            if (ClaudeClient.HasKey)
-                UIKit.Btn(head, narrate ? "AI実況：ON" : "AI実況：OFF", () => { narrate = !narrate; Show(BattleScreen); },
-                    primary: false, size: 20);
-
-            var arena = UIKit.HStack(col, 16, true, TextAnchor.UpperLeft);
-            FighterPanel(arena, b.p, true);
-            FighterPanel(arena, b.e, false);
-
-            ShowNote();
-
-            if (b.over != Outcome.None && !busy)
+            lastTwoPlayer = twoPlayer;
+            current = null;
+            spinner = null;
+            if (screenRoot != null) Destroy(screenRoot.gameObject);
+            screenRoot = null;
+            FightController.Begin(canvasRt, me, enemy, twoPlayer, action =>
             {
-                var p = UIKit.Panel(col);
-                var (text, c) = b.over == Outcome.Win ? ("勝利", Pal.Gold) : b.over == Outcome.Lose ? ("敗北", Pal.Rose) : ("引き分け", Pal.Gold);
-                UIKit.Label(p, text, 80, c, FontStyle.Bold, TextAnchor.MiddleCenter);
-                var row = UIKit.HStack(p, 12, false, TextAnchor.MiddleCenter);
-                UIKit.Btn(row, "再戦", StartBattle);
-                UIKit.Btn(row, "次の刺客", SummonRival, primary: false);
-                UIKit.Btn(row, "自分のスタンドへ", () => Show(ResultScreen), primary: false);
-            }
-            else
-            {
-                UIKit.Label(col, busy ? "実況中…" : "技を選んでください", 22, Pal.Muted);
-                var kinds = (MoveKind[])Enum.GetValues(typeof(MoveKind));
-                for (int r = 0; r < 2; r++)
-                {
-                    var row = UIKit.HStack(col, 12, true, TextAnchor.UpperLeft);
-                    for (int c = 0; c < 2; c++)
-                    {
-                        var k = kinds[r * 2 + c];
-                        var m = b.p.s.moves.Get(k);
-                        bool ok = !busy && b.CanUse(b.p, k);
-                        string label = StandMoves.Label(k) + (k == MoveKind.Special && b.p.cd > 0 ? $" · あと{b.p.cd}" : "");
-                        UIKit.Flex(UIKit.Btn(row,
-                            $"<size=16><color=#{(k == MoveKind.Special ? "ffc93c" : "a597b3")}>{label}</color></size>\n{m.name}\n<size=18><color=#a597b3>{m.desc}</color></size>",
-                            () => DoMove(k), primary: false, size: 26, align: TextAnchor.MiddleLeft, interactable: ok));
-                    }
-                }
-            }
-
-            // Log, newest first
-            var log = UIKit.VStack(col, 18, 24, Pal.Deep);
-            for (int i = b.log.Count - 1; i >= 0; i--)
-            {
-                var e = b.log[i];
-                var v = UIKit.VStack(log, 4);
-                UIKit.Label(v, e.title, 16, Pal.Gold, FontStyle.Bold);
-                UIKit.Label(v, e.sys, 20, Pal.Muted);
-                e.narText = UIKit.Label(v, e.nar ?? "", 26, Pal.Text, FontStyle.Bold);
-                if (string.IsNullOrEmpty(e.nar)) e.narText.gameObject.SetActive(false);
-            }
-        }
-
-        void DoMove(MoveKind k)
-        {
-            var b = battle;
-            if (busy || b.over != Outcome.None || !b.CanUse(b.p, k)) return;
-            var ek = b.EnemyChoice();
-            var title = $"TURN {b.turn}";
-            var events = b.Resolve(k, ek);
-            var entry = new LogEntry { title = title, sys = string.Join(" ／ ", events) };
-            b.log.Add(entry);
-
-            if (narrate && ClaudeClient.HasKey)
-            {
-                busy = true;
-                entry.nar = "…";
-                Show(BattleScreen);
-                StartCoroutine(ClaudeClient.Ask(b.NarrationPrompt(k, ek, entry.sys), "low", 2000,
-                    text => { entry.nar = text.Trim(); AfterTurn(); },
-                    err => { entry.nar = null; note = "実況を取得できませんでした：" + err; AfterTurn(); }));
-            }
-            else
-            {
-                AfterTurn();
-            }
-        }
-
-        void AfterTurn()
-        {
-            busy = false;
-            if (battle.over != Outcome.None) battle.log.Add(battle.FinishEntry());
-            if (current != null && current.Method.Name == nameof(BattleScreen)) Show(BattleScreen);
+                if (action == "rematch") StartBattle(lastTwoPlayer);
+                else if (action == "next") SummonRival();
+                else Show(ResultScreen);
+            });
         }
     }
 
