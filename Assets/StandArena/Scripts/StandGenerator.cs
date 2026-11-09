@@ -16,7 +16,7 @@ namespace StandArena
             "\"appearance\":\"見た目（60字以内）\"," +
             "\"abilityName\":\"能力名（10字以内）\",\"ability\":\"能力の説明（120字以内）\",\"weakness\":\"弱点（60字以内）\"," +
             "\"quote\":\"本体が言いそうな決め台詞（30字以内）\",\"moves\":{\"attack\":{\"name\":\"\",\"desc\":\"\"}," +
-            "\"charge\":{\"name\":\"\",\"desc\":\"\"},\"guard\":{\"name\":\"\",\"desc\":\"\"},\"special\":{\"name\":\"\",\"desc\":\"\"}}}";
+            "\"charge\":{\"name\":\"\",\"desc\":\"\"},\"guard\":{\"name\":\"\",\"desc\":\"\"},\"special\":{\"name\":\"\",\"desc\":\"\"}}," + StandAbility.SchemaShape + "}";
 
         /// <summary>共闘型（絆）はお笑いコンビ風、一匹狼（単）は音楽アーティスト風の名前にする。</summary>
         public static bool ComedyStyle(Axes ax) => ax.s < 0;
@@ -41,6 +41,7 @@ namespace StandArena
                 "能力は「条件付き」で具体的にし、能力値と矛盾しないこと（射程Eなら手の届く範囲だけ、など）。ゆずれないものを能力のモチーフに必ず織り込むこと。弱点も必ず付けること。\n" +
                 "技は次の4種類で、それぞれ能力に沿った名前と短い説明（40字以内）を付ける:\n" +
                 "- attack: 通常攻撃\n- charge: 次の攻撃を強化するための溜め\n- guard: 防御と回復\n- special: 能力の真骨頂。防御を貫く必殺技\n\n" +
+                StandAbility.SchemaHelp + "\n\n" +
                 "次の形のJSONだけを返してください:\n" + JsonShape;
         }
 
@@ -83,6 +84,7 @@ namespace StandArena
             result.owner = owner;
             result.type = typeCode;
             result.stats = stats;
+            StandAbility.Resolve(result);
             result.Sanitize();
             done(result, note);
         }
@@ -105,6 +107,17 @@ namespace StandArena
             new[] { "境界線", "本体が引いた線を、敵意を持つものは越えられない。", "線は一本だけ。本体が線をまたぐと消える。" },
             new[] { "鏡像返し", "受けた攻撃の『痛み』だけを鏡に映し、相手に返す。", "鏡が割れると能力が一日使えなくなる。" },
         };
+
+        static AbilitySpec OfflineSpec(string abilityName)
+        {
+            switch (abilityName)
+            {
+                case "衝撃刻印": return new AbilitySpec { type = "mark", trigger = "stand", power = 1.2f, limit = 3 };
+                case "加速打撃": return new AbilitySpec { type = "rewind", trigger = "hit", power = 1f, cost = "selfDamage", costValue = 2 };
+                case "境界線": return new AbilitySpec { type = "barrier", trigger = "stand", duration = 3f, cost = "cooldown", costValue = 8 };
+                default: return new AbilitySpec { type = "reflect", trigger = "stand", power = 1f, limit = 3 };
+            }
+        }
         static readonly string[] Looks =
         {
             "顔のない騎士のような人型。胸に古い時計がはめこまれている。",
@@ -130,6 +143,7 @@ namespace StandArena
                 origin = comedy ? "お笑いコンビ風。身近な言葉と大げさな言葉の組み合わせ" : "音楽アーティスト風。情景の言葉と音楽用語の組み合わせ",
                 appearance = Pick(Looks),
                 abilityName = ab[0],
+                battle = StandAbility.Clamp(OfflineSpec(ab[0])),
                 ability = ab[1] + motif,
                 weakness = ab[2],
                 quote = Pick(Quotes),

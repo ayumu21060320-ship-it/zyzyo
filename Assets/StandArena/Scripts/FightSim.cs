@@ -47,8 +47,17 @@ namespace StandArena
         public float walk, jumpV;
         public readonly MoveDef light, heavy, special, airLight, airHeavy;
 
+        // Stand ability state
+        public readonly AbilitySpec ab;
+        public int freezeT, slowT, weakenT, sealT, hasteT, abilityCd, abilityUses, marks, barrierT;
+        public float weakenMul = 1f, barrierX;
+        public int barrierSide;
+        public readonly Vector2[] hist = new Vector2[64];
+        public int histI;
+        public bool projSpawned;
+
         // Per-match stats
-        public int roundsWon, maxCombo, specials;
+        public int roundsWon, maxCombo, specials, abilityCount;
         public float dealt;
 
         // Events for the view (consumed each frame)
@@ -61,6 +70,7 @@ namespace StandArena
         {
             this.s = s;
             this.p1 = p1;
+            ab = StandAbility.Resolve(s);
             var st = s.stats;
             max = 800 + st.durability * 80;
             walk = 3.2f + st.speed * 0.55f;
@@ -115,6 +125,10 @@ namespace StandArena
             hp = max;
             awake = false;
             stun = invuln = flash = comboTaken = 0;
+            freezeT = slowT = weakenT = sealT = hasteT = abilityCd = abilityUses = marks = barrierT = 0;
+            weakenMul = 1f;
+            for (int i = 0; i < hist.Length; i++) hist[i] = new Vector2(x, y);
+            histI = 0;
             callouts.Clear();
         }
 
@@ -130,6 +144,12 @@ namespace StandArena
         public int age;
     }
 
+    public struct Ghost
+    {
+        public float x, y;
+        public bool p1;
+    }
+
     public struct Spark
     {
         public float x, y;
@@ -137,7 +157,7 @@ namespace StandArena
     }
 
     /// <summary>The fighting game rules, stepped at a fixed 60 frames per second. No UI.</summary>
-    public class FightSim
+    public partial class FightSim
     {
         public const float StageW = 1600f;
         public const float Gravity = 1.1f;
@@ -145,7 +165,9 @@ namespace StandArena
         public readonly Fighter2D a, b;
         public readonly List<Projectile> projs = new List<Projectile>();
         public readonly List<Spark> sparks = new List<Spark>();   // consumed by the view
+        public readonly List<Ghost> ghosts = new List<Ghost>();   // afterimages for rewind / teleport, consumed by the view
         public int hitstop;
+        int frame;
 
         public FightSim(Stand p1, Stand p2)
         {
@@ -164,14 +186,22 @@ namespace StandArena
 
         public void Step(ref FightInput ia, ref FightInput ib, bool control)
         {
-            Think(a, ref ia, b, control);
-            Think(b, ref ib, a, control);
-            Physics(a);
-            Physics(b);
+            frame++;
+            TickTimers(a);
+            TickTimers(b);
+            bool actA = Active(a), actB = Active(b);
+            if (actA) Think(a, ref ia, b, control);
+            if (actB) Think(b, ref ib, a, control);
+            if (actA) Physics(a);
+            if (actB) Physics(b);
             Separate();
+            KeepOutOfBarrier(a, b);
+            KeepOutOfBarrier(b, a);
             UpdateProjectiles();
-            CheckHit(a, b);
-            CheckHit(b, a);
+            if (actA) CheckHit(a, b);
+            if (actB) CheckHit(b, a);
+            Record(a);
+            Record(b);
         }
 
         // ------------------------------------------------------------ per-fighter logic
@@ -216,7 +246,7 @@ namespace StandArena
                     return;
                 case FState.Charge:
                     if (!control || !inp.charge) { f.st = FState.Idle; f.t = 0; }
-                    else f.gauge = Mathf.Min(100f, f.gauge + 0.45f + f.s.stats.potential * 0.07f);
+                    else AddGauge(f, 0.45f + f.s.stats.potential * 0.07f);
                     return;
             }
 
@@ -234,6 +264,7 @@ namespace StandArena
                     f.gauge -= f.special.cost;
                     f.specials++;
                     Start(f, f.special);
+                    OnSpecialStart(f, o);
                     return;
                 }
                 if (inp.heavy) { inp.heavy = false; Start(f, f.heavy); return; }
@@ -247,7 +278,7 @@ namespace StandArena
                 if (inp.up)
                 {
                     f.vy = f.jumpV;
-                    f.vx = dir * f.walk * 1.15f;
+                    f.vx = dir * f.walk * 1.15f * (f.hasteT > 0 ? 1.5f : 1f);
                     f.st = FState.Jump; f.t = 0; f.airUsed = false;
                     return;
                 }
@@ -257,7 +288,7 @@ namespace StandArena
                     f.st = FState.Crouch; f.vx = 0;
                     return;
                 }
-                f.vx = dir * f.walk * (dir == -f.face ? 0.8f : 1f);
+                f.vx = dir * f.walk * (dir == -f.face ? 0.8f : 1f) * (f.hasteT > 0 ? 1.5f : 1f);
                 var next = dir != 0 ? FState.Walk : FState.Idle;
                 if (next != f.st) f.t = 0;
                 f.st = next;
@@ -275,6 +306,7 @@ namespace StandArena
             f.t = 0;
             f.move = m;
             f.moveHit = false;
+            f.projSpawned = false;
             f.lastHitT = -999;
             if (f.Grounded) f.vx = 0;
             if (m.stand) f.Callout(m.special ? $"『{m.name}』！" : m.name);
@@ -284,12 +316,16 @@ namespace StandArena
         {
             var m = f.move;
             if (m == null) { f.st = FState.Idle; f.t = 0; return; }
+            if (f.hasteT > 0 && (frame & 1) == 0) f.t++;   // hasted: attacks play 1.5x faster
             bool activeNow = f.t >= m.startup && f.t < m.startup + m.active;
             if (m.rush && activeNow) f.vx = f.face * m.rushSpeed;
             else if (f.Grounded) f.vx *= 0.8f;
 
-            if (m.projectile && f.t == m.startup)
+            if (m.projectile && !f.projSpawned && f.t >= m.startup)
+            {
+                f.projSpawned = true;
                 projs.Add(new Projectile { owner = f, m = m, x = f.x + f.face * m.reachX, y = f.y + m.reachY, vx = f.face * m.projSpeed });
+            }
 
             if (f.t >= m.Total)
             {
@@ -375,6 +411,12 @@ namespace StandArena
                 p.age++;
                 if (p.x < -100 || p.x > StageW + 100) { p.alive = false; continue; }
                 var o = p.owner == a ? b : a;
+                if (o.barrierT > 0 && Mathf.Abs(p.x - o.barrierX) < 30)
+                {
+                    p.alive = false;
+                    sparks.Add(new Spark { x = p.x, y = p.y, blocked = true, big = true });
+                    continue;
+                }
                 if (CanBeHit(o) && new Rect(p.x - 30, p.y - 30, 60, 60).Overlaps(HurtBox(o)))
                 {
                     p.alive = false;
@@ -399,18 +441,32 @@ namespace StandArena
         void ApplyHit(Fighter2D f, Fighter2D o, MoveDef m, int dir, float px, float py)
         {
             bool blocking = o.Grounded && o.holdBack && (IdleLike(o.st) || o.st == FState.Block);
-            float dmg = m.damage * (f.awake ? 1f + f.s.stats.potential * 0.06f : 1f);
+            float dmg = m.damage * (f.awake ? 1f + f.s.stats.potential * 0.06f : 1f) * f.weakenMul;
 
             if (blocking)
             {
                 o.st = FState.Block; o.t = 0; o.stun = m.blockstun;
                 o.vx = dir * m.push * 0.7f;
                 if (m.special) o.hp = Mathf.Max(0, o.hp - dmg * 0.15f);
-                f.gauge = Mathf.Min(100f, f.gauge + 3);
-                o.gauge = Mathf.Min(100f, o.gauge + 4);
+                AddGauge(f, 3);
+                AddGauge(o, 4);
                 sparks.Add(new Spark { x = px, y = py, blocked = true });
                 hitstop = 4;
                 if (o.guardCalloutCooldown == 0) { o.Callout(o.s.moves.guard.name); o.guardCalloutCooldown = 90; }
+                OnBlocked(o, f, dmg, dir);
+                if (o.hp <= 0) Ko(o, dir);
+                return;
+            }
+
+            if (Armored(o))
+            {
+                float taken = dmg * (1f - 0.15f * o.ab.power);
+                o.hp -= taken;
+                f.dealt += taken;
+                o.flash = 3;
+                sparks.Add(new Spark { x = px, y = py });
+                hitstop = 5;
+                if (o.guardCalloutCooldown == 0) { o.Callout($"『{o.s.abilityName}』{StandAbility.Label("armor")}"); o.guardCalloutCooldown = 90; }
                 if (o.hp <= 0) Ko(o, dir);
                 return;
             }
@@ -434,14 +490,21 @@ namespace StandArena
             }
             o.move = null;
             o.flash = 5;
-            f.gauge = Mathf.Min(100f, f.gauge + dmg * 0.12f + 2);
-            o.gauge = Mathf.Min(100f, o.gauge + dmg * 0.08f);
+            AddGauge(f, dmg * 0.12f + 2);
+            AddGauge(o, dmg * 0.08f);
             hitstop = (m.special || m.stand) ? 9 : 5;
             sparks.Add(new Spark { x = px, y = py, big = m.special || m.stand });
             if (crit) f.Callout("クリティカル！");
 
-            if (o.hp <= 0) Ko(o, dir);
-            else if (!o.awake && o.hp <= o.max * 0.3f)
+            if (o.hp <= 0) { Ko(o, dir); return; }
+            OnHitEffect(f, o, m, dmg, dir);
+            if (o.hp <= 0) { Ko(o, dir); return; }
+            CheckAwake(o);
+        }
+
+        static void CheckAwake(Fighter2D o)
+        {
+            if (!o.awake && o.hp > 0 && o.hp <= o.max * 0.3f)
             {
                 o.awake = true;
                 o.Callout("覚醒！");

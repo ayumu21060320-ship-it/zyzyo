@@ -300,6 +300,9 @@ namespace StandArena
             Section("外見", s.appearance);
             Section($"能力『{s.abilityName}』", s.ability);
             Section("弱点", s.weakness);
+            Section("バトルでの効果", s.battle != null && s.battle.IsValid
+                ? StandAbility.Describe(s.battle)
+                : "対戦を始めるときに、能力と弱点の文章から決まります");
             UIKit.Label(card, $"「{s.quote}」", 28, Pal.Text, FontStyle.Bold);
         }
 
@@ -406,6 +409,8 @@ namespace StandArena
                 $"I 長押し：溜め「{me.moves.charge.name}」でSPゲージを貯める　　ガード時は「{me.moves.guard.name}」\n" +
                 (me.stats.range >= 3 ? "あなたの必殺技は射程が長いので「飛び道具」です。" : "あなたの必殺技は射程が短いので「突進ラッシュ」です。") +
                 "　HPが3割を切ると覚醒して攻撃力が上がります。Escで中断。", 20, Pal.Muted);
+            UIKit.Label(how, $"あなたの能力『{me.abilityName}』：" + (me.battle != null && me.battle.IsValid
+                ? StandAbility.Describe(me.battle) : "対戦開始時に決まります"), 20, Pal.Gold);
             UIKit.Label(how, "2人対戦の2P：←→ 移動　↑ ジャンプ　↓ しゃがむ　テンキー1/2/3（または , . /）で弱・スタンド・必殺、テンキー4（または ;）で溜め", 18, Pal.Muted);
 
             var row = UIKit.HStack(col, 12);
@@ -421,6 +426,33 @@ namespace StandArena
         void StartBattle(bool twoPlayer)
         {
             lastTwoPlayer = twoPlayer;
+            if (ClaudeClient.HasKey && (StandAbility.NeedsConversion(me) || StandAbility.NeedsConversion(enemy)))
+            {
+                StartCoroutine(ConvertAbilities());
+                return;
+            }
+            StandAbility.Resolve(me);
+            StandAbility.Resolve(enemy);
+            me.Save();
+            BeginFight(twoPlayer);
+        }
+
+        /// <summary>Stands made before abilities worked in fights: let the AI turn the ability text into an effect, then show it.</summary>
+        IEnumerator ConvertAbilities()
+        {
+            Show(() => GeneratingScreen("能力をバトル用に変換中…", me.type));
+            string err = null;
+            if (StandAbility.NeedsConversion(me)) yield return StandAbility.Convert(me, e => err = e);
+            if (StandAbility.NeedsConversion(enemy)) yield return StandAbility.Convert(enemy, e => err = e);
+            me.Save();
+            note = err == null
+                ? "能力をバトル用の効果に変換しました。「バトルでの効果」を確認してから対戦を始めてください。"
+                : $"AIでの変換に失敗したため、能力の文章から効果を決めました（{err}）";
+            Show(PreviewScreen);
+        }
+
+        void BeginFight(bool twoPlayer)
+        {
             current = null;
             spinner = null;
             if (screenRoot != null) Destroy(screenRoot.gameObject);

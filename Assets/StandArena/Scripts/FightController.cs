@@ -34,7 +34,8 @@ namespace StandArena
         // View
         FighterView v1, v2;
         Image hp1, hp2, trail1, trail2, gauge1, gauge2;
-        Text timerText, centerText, combo1, combo2, awake1, awake2, gaugeText1, gaugeText2;
+        Text timerText, centerText, combo1, combo2, awake1, awake2, gaugeText1, gaugeText2, abil1, abil2;
+        Image barrier1, barrier2;
         Image[] dots1, dots2;
         float trailR1 = 1, trailR2 = 1;
         int comboShow1, comboShow2;
@@ -300,6 +301,8 @@ namespace StandArena
             Box(shakeTarget, 0, 0, FightSim.StageW, Ground, Pal.Deep, Vector2.zero);
             Box(shakeTarget, 0, Ground, FightSim.StageW, 3, new Color(Pal.Gold.r, Pal.Gold.g, Pal.Gold.b, 0.5f), new Vector2(0, 0.5f));
 
+            barrier1 = Box(shakeTarget, 0, Ground, 16, 460, Pal.Cyan, new Vector2(0.5f, 0));
+            barrier2 = Box(shakeTarget, 0, Ground, 16, 460, Pal.Rose, new Vector2(0.5f, 0));
             v1 = new FighterView(this, shakeTarget, sim.a, Pal.Cyan, sig1);
             v2 = new FighterView(this, shakeTarget, sim.b, Pal.Rose, sig2);
             fxLayer = UIKit.New("Fx", shakeTarget);
@@ -314,6 +317,8 @@ namespace StandArena
             Txt(hud, $"<color=#ff5d7a>{p2s.name}</color>　{p2s.owner}", 1540, 770, 700, 40, 26, Pal.Text, TextAnchor.LowerRight, new Vector2(1, 0));
             awake1 = Txt(hud, "覚醒", 60, 735, 200, 30, 22, Pal.Gold, TextAnchor.LowerLeft, Vector2.zero);
             awake2 = Txt(hud, "覚醒", 1540, 735, 200, 30, 22, Pal.Gold, TextAnchor.LowerRight, new Vector2(1, 0));
+            abil1 = Txt(hud, "", 160, 735, 600, 30, 20, Pal.Text, TextAnchor.LowerLeft, Vector2.zero);
+            abil2 = Txt(hud, "", 1440, 735, 600, 30, 20, Pal.Text, TextAnchor.LowerRight, new Vector2(1, 0));
 
             Box(hud, 800, 806, 120, 80, Pal.Deep, new Vector2(0.5f, 0));
             timerText = Txt(hud, "60", 800, 846, 120, 80, 58, Pal.Gold, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f));
@@ -402,6 +407,10 @@ namespace StandArena
 
             v1.Update(sim.a);
             v2.Update(sim.b);
+            v1.SetStatus(Status(sim.a, sim.b));
+            v2.SetStatus(Status(sim.b, sim.a));
+            UpdateBarrier(barrier1, sim.a);
+            UpdateBarrier(barrier2, sim.b);
             UpdateHud();
             UpdateProjectiles();
             UpdateFx();
@@ -418,6 +427,8 @@ namespace StandArena
             hp2.color = rb < 0.3f ? Pal.Rose : Pal.Gold;
             awake1.enabled = sim.a.awake;
             awake2.enabled = sim.b.awake;
+            abil1.text = AbilityHud(sim.a);
+            abil2.text = AbilityHud(sim.b);
 
             timerText.text = Mathf.CeilToInt(Mathf.Max(0, timer) / 60f).ToString();
             for (int i = 0; i < 2; i++)
@@ -433,6 +444,41 @@ namespace StandArena
             UpdateCombo(combo2, ref comboShow2, sim.a.comboTaken);
 
             centerText.text = CenterMessage();
+        }
+
+        static string AbilityHud(Fighter2D f)
+        {
+            var a = f.ab;
+            string state;
+            if (f.abilityCd > 0) state = $"<color=#a597b3>あと{f.abilityCd / 60f:0.0}秒</color>";
+            else if (a.limit > 0 && a.type != "mark" && f.abilityUses >= a.limit) state = "<color=#a597b3>使い切った</color>";
+            else if (a.cost == "gauge" && f.gauge < a.costValue) state = "<color=#a597b3>SP不足</color>";
+            else state = "<color=#ffc93c>OK</color>";
+            if (a.type == "mark") state += $"　刻印 {f.marks}/{a.limit}";
+            return $"『{f.s.abilityName}』{state}";
+        }
+
+        static string Status(Fighter2D f, Fighter2D o)
+        {
+            var list = new List<string>();
+            if (f.freezeT > 0) list.Add("<color=#9fd8ff>停止</color>");
+            if (f.slowT > 0) list.Add("<color=#c9a8ff>スロー</color>");
+            if (f.weakenT > 0) list.Add("<color=#ff9fb0>弱体</color>");
+            if (f.sealT > 0) list.Add("<color=#ff9fb0>封印</color>");
+            if (f.hasteT > 0) list.Add("<color=#ffc93c>加速</color>");
+            if (o.ab.type == "mark" && o.marks > 0) list.Add($"<color=#ffc93c>刻印×{o.marks}</color>");
+            return string.Join(" ", list);
+        }
+
+        void UpdateBarrier(Image img, Fighter2D f)
+        {
+            bool on = f.barrierT > 0;
+            img.enabled = on;
+            if (!on) return;
+            img.rectTransform.anchoredPosition = new Vector2(f.barrierX, Ground);
+            var c = img.color;
+            c.a = 0.45f + Mathf.Sin(Time.time * 10) * 0.15f;
+            img.color = c;
         }
 
         void SetGauge(Image fill, Text label, Fighter2D f)
@@ -497,6 +543,14 @@ namespace StandArena
             }
             sim.sparks.Clear();
 
+            foreach (var gh in sim.ghosts)
+            {
+                var img = Box(fxLayer, gh.x, Ground + gh.y, 90, 220, gh.p1 ? Pal.Cyan : Pal.Rose, new Vector2(0.5f, 0), true);
+                var c = img.color; c.a = 0.5f; img.color = c;
+                fx.Add(new Fx { rt = img.rectTransform, g = img, life = 30, spark = false });
+            }
+            sim.ghosts.Clear();
+
             SpawnCallouts(sim.a, v1);
             SpawnCallouts(sim.b, v2);
 
@@ -550,7 +604,7 @@ namespace StandArena
             UIKit.Label(panel, title, 84, tc, FontStyle.Bold, TextAnchor.MiddleCenter);
             UIKit.Label(panel, $"{me.s.name}  {me.roundsWon} - {en.roundsWon}  {en.s.name}", 28, Pal.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
             UIKit.Label(panel,
-                $"最大コンボ {me.maxCombo} / {en.maxCombo}　　必殺技 {me.specials} / {en.specials}回　　与ダメージ {Mathf.RoundToInt(me.dealt)} / {Mathf.RoundToInt(en.dealt)}",
+                $"最大コンボ {me.maxCombo} / {en.maxCombo}　　必殺技 {me.specials} / {en.specials}回　　能力 {me.abilityCount} / {en.abilityCount}回　　与ダメージ {Mathf.RoundToInt(me.dealt)} / {Mathf.RoundToInt(en.dealt)}",
                 20, Pal.Muted, FontStyle.Normal, TextAnchor.MiddleCenter);
 
             if (ClaudeClient.HasKey)
@@ -578,7 +632,8 @@ namespace StandArena
                 $"結果: {result}（ラウンド {me.roundsWon}-{en.roundsWon}）\n" +
                 $"最大コンボ 1P {me.maxCombo} / 2P {en.maxCombo}、必殺技の使用 1P {me.specials}回 / 2P {en.specials}回、" +
                 $"与ダメージ 1P {Mathf.RoundToInt(me.dealt)} / 2P {Mathf.RoundToInt(en.dealt)}、" +
-                $"1Pの覚醒 {(me.awake ? "あり" : "なし")}、2Pの覚醒 {(en.awake ? "あり" : "なし")}";
+                $"1Pの覚醒 {(me.awake ? "あり" : "なし")}、2Pの覚醒 {(en.awake ? "あり" : "なし")}、" +
+                $"能力の発動回数 1P {me.abilityCount}回 / 2P {en.abilityCount}回";
         }
 
         // ------------------------------------------------------------ fighter drawing (jointed body)
@@ -623,6 +678,9 @@ namespace StandArena
             readonly Color accent;
             Pose cur = Pose.Guard;
             float walkPhase;
+            readonly Text status;
+
+            public void SetStatus(string s) => status.text = s;
 
             public FighterView(FightController fc, Transform parent, Fighter2D f, Color accent, Texture sigil)
             {
@@ -652,6 +710,10 @@ namespace StandArena
                 Add(fc.Box(head, 11, 24, 14, 7, Pal.Ink, new Vector2(0.5f, 0.5f)), Pal.Ink, centerAnchor: true); // eye band
                 (lFu, lFl) = Leg(fc, pelvis, 9, accent, accent);
                 (aFu, aFl) = Arm(fc, torso, 8, TorsoH - 8, accent, headCol);
+
+                status = fc.Txt(rootRt, "", 0, 245, 400, 30, 22, Pal.Text, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f));
+                status.rectTransform.anchorMin = status.rectTransform.anchorMax = new Vector2(0.5f, 0);
+                status.rectTransform.anchoredPosition = new Vector2(0, 245);
 
                 var sh = fc.Box(body, 70, 95, 150, 190, new Color(accent.r, accent.g, accent.b, 0.25f), new Vector2(0.5f, 0.5f), true);
                 shield = sh.rectTransform;
@@ -849,7 +911,7 @@ namespace StandArena
                 shadow.localScale = new Vector3(1 - air * 0.5f, 1 - air * 0.5f, 1);
 
                 // Blend toward the target pose; attacks snap faster so hits read clearly.
-                var target = Target(f, dt);
+                var target = f.freezeT > 0 ? cur : Target(f, dt);
                 float speed = f.st == FState.Attack || f.st == FState.Hit ? 40f : 16f;
                 cur = Pose.Lerp(cur, target, 1f - Mathf.Exp(-speed * dt));
 
@@ -875,7 +937,9 @@ namespace StandArena
 
                 // Flash white when hit.
                 bool flash = f.flash > 0;
-                foreach (var (img, col) in parts) img.color = flash ? Color.white : col;
+                var frozenCol = new Color(0.62f, 0.85f, 1f);
+                foreach (var (img, col) in parts)
+                    img.color = flash ? Color.white : f.freezeT > 0 ? Color.Lerp(col, frozenCol, 0.7f) : col;
 
                 shield.gameObject.SetActive(f.st == FState.Block);
 

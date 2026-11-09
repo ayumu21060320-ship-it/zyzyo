@@ -98,6 +98,7 @@ namespace StandArena
         public string quote = "";
         public StandStats stats = new StandStats();
         public StandMoves moves = new StandMoves();
+        public AbilitySpec battle = new AbilitySpec();   // how the ability works in a fight
 
         public static string Grade(int g) => "EDCBA"[Mathf.Clamp(g, 1, 5) - 1].ToString();
 
@@ -125,6 +126,8 @@ namespace StandArena
             quote = Trim(quote, 60);
             if (stats == null) stats = new StandStats();
             stats.ClampAll();
+            if (battle == null) battle = new AbilitySpec();
+            if (battle.IsValid) StandAbility.Clamp(battle);
             foreach (MoveKind k in Enum.GetValues(typeof(MoveKind)))
             {
                 var m = moves.Get(k);
