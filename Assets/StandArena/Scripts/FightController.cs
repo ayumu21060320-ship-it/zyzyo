@@ -581,20 +581,55 @@ namespace StandArena
                 $"1Pの覚醒 {(me.awake ? "あり" : "なし")}、2Pの覚醒 {(en.awake ? "あり" : "なし")}";
         }
 
-        // ------------------------------------------------------------ fighter drawing
+        // ------------------------------------------------------------ fighter drawing (jointed body)
+
+        /// <summary>
+        /// Joint angles in degrees. Limb angle 0 = hanging straight down, positive = swinging forward.
+        /// Lower limb angles (forearm, shin) are relative to the upper limb: negative shin = bent knee.
+        /// </summary>
+        struct Pose
+        {
+            public float lean, head;
+            public float aFu, aFl, aBu, aBl;   // front / back arm: upper, lower
+            public float lFu, lFl, lBu, lBl;   // front / back leg: thigh, shin
+
+            public static Pose Lerp(Pose a, Pose b, float k)
+            {
+                return new Pose
+                {
+                    lean = Mathf.Lerp(a.lean, b.lean, k), head = Mathf.Lerp(a.head, b.head, k),
+                    aFu = Mathf.Lerp(a.aFu, b.aFu, k), aFl = Mathf.Lerp(a.aFl, b.aFl, k),
+                    aBu = Mathf.Lerp(a.aBu, b.aBu, k), aBl = Mathf.Lerp(a.aBl, b.aBl, k),
+                    lFu = Mathf.Lerp(a.lFu, b.lFu, k), lFl = Mathf.Lerp(a.lFl, b.lFl, k),
+                    lBu = Mathf.Lerp(a.lBu, b.lBu, k), lBl = Mathf.Lerp(a.lBl, b.lBl, k)
+                };
+            }
+
+            public static Pose Guard => new Pose
+            {
+                lean = 6, aFu = 45, aFl = 95, aBu = 25, aBl = 105,
+                lFu = 18, lFl = -22, lBu = -16, lBl = -12
+            };
+        }
 
         class FighterView
         {
-            readonly RectTransform rootRt, body, arm, standRt, shield, shadow;
-            readonly Image torso, head, legL, legR, armImg, shieldImg;
+            const float UpperArm = 36, LowerArm = 34, Thigh = 42, Shin = 42, TorsoH = 64;
+
+            readonly RectTransform rootRt, body, pelvis, torso, head, shield, shadow, standRt;
+            readonly RectTransform aFu, aFl, aBu, aBl, lFu, lFl, lBu, lBl;
             readonly RawImage standImg;
-            readonly Color accent, headCol, legCol;
+            readonly List<(Image img, Color col)> parts = new List<(Image, Color)>();
+            readonly Color accent;
+            Pose cur = Pose.Guard;
+            float walkPhase;
 
             public FighterView(FightController fc, Transform parent, Fighter2D f, Color accent, Texture sigil)
             {
                 this.accent = accent;
-                headCol = Color.Lerp(accent, Color.white, 0.55f);
-                legCol = Color.Lerp(accent, Color.black, 0.25f);
+                var headCol = Color.Lerp(accent, Color.white, 0.55f);
+                var backCol = Color.Lerp(accent, Color.black, 0.35f);
+                var backSkin = Color.Lerp(headCol, Color.black, 0.3f);
 
                 shadow = fc.Box(parent, f.x, Ground, 120, 20, new Color(0, 0, 0, 0.5f), new Vector2(0.5f, 0.5f), true).rectTransform;
                 rootRt = fc.At("Fighter", parent, f.x, Ground, 0, 0, new Vector2(0.5f, 0));
@@ -603,67 +638,249 @@ namespace StandArena
                 standRt = standImg.rectTransform;
                 standRt.anchorMin = standRt.anchorMax = new Vector2(0.5f, 0);
 
-                body = fc.At("Body", rootRt, 0, 0, 0, 0, new Vector2(0.5f, 0));
-                body.anchorMin = body.anchorMax = new Vector2(0.5f, 0);
-                legL = Part(fc, body, -15, 0, 22, 78, legCol);
-                legR = Part(fc, body, 15, 0, 22, 78, legCol);
-                torso = Part(fc, body, 0, 74, 58, 76, accent);
-                head = Part(fc, body, 0, 150, 48, 48, headCol, true);
-                armImg = Part(fc, body, 6, 128, 46, 18, headCol);
-                arm = armImg.rectTransform;
-                arm.pivot = new Vector2(0, 0.5f);
-                shieldImg = Part(fc, body, 60, 95, 150, 190, new Color(accent.r, accent.g, accent.b, 0.25f), true);
-                shield = shieldImg.rectTransform;
-                shield.pivot = new Vector2(0.5f, 0.5f);
+                body = Node(rootRt, "Body", 0, 0);
+                pelvis = Node(body, "Pelvis", 0, 90);
+
+                // Draw order: back leg, back arm, torso, head, front leg, front arm.
+                (lBu, lBl) = Leg(fc, pelvis, -9, backCol, backCol);
+                torso = Node(pelvis, "Torso", 0, 0);
+                (aBu, aBl) = Arm(fc, torso, -6, TorsoH - 8, backCol, backSkin);
+                Add(fc.Box(torso, 0, -6, 54, TorsoH + 6, accent, new Vector2(0.5f, 0)), accent, centerAnchor: true);
+                Add(fc.Box(torso, 0, -10, 58, 16, backCol, new Vector2(0.5f, 0)), backCol, centerAnchor: true); // belt
+                head = Node(torso, "Head", 4, TorsoH + 4);
+                Add(fc.Box(head, 0, 0, 44, 46, headCol, new Vector2(0.5f, 0), true), headCol, centerAnchor: true);
+                Add(fc.Box(head, 11, 24, 14, 7, Pal.Ink, new Vector2(0.5f, 0.5f)), Pal.Ink, centerAnchor: true); // eye band
+                (lFu, lFl) = Leg(fc, pelvis, 9, accent, accent);
+                (aFu, aFl) = Arm(fc, torso, 8, TorsoH - 8, accent, headCol);
+
+                var sh = fc.Box(body, 70, 95, 150, 190, new Color(accent.r, accent.g, accent.b, 0.25f), new Vector2(0.5f, 0.5f), true);
+                shield = sh.rectTransform;
+                shield.anchorMin = shield.anchorMax = new Vector2(0.5f, 0);
             }
 
-            static Image Part(FightController fc, RectTransform parent, float x, float y, float w, float h, Color c, bool round = false)
+            static RectTransform Node(Transform parent, string name, float x, float y)
             {
-                var img = fc.Box(parent, x, y, w, h, c, new Vector2(0.5f, 0), round);
+                var rt = UIKit.New(name, parent);
+                rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.sizeDelta = Vector2.zero;
+                rt.anchoredPosition = new Vector2(x, y);
+                return rt;
+            }
+
+            void Add(Image img, Color col, bool centerAnchor = false)
+            {
+                if (centerAnchor)
+                {
+                    var rt = img.rectTransform;
+                    var pos = rt.anchoredPosition;
+                    rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+                    rt.anchoredPosition = pos;
+                }
+                parts.Add((img, col));
+            }
+
+            /// <summary>A limb segment hanging from its top end. Children attach at its bottom end.</summary>
+            RectTransform Segment(FightController fc, Transform parent, float len, float width, Color col, bool atParentEnd)
+            {
+                var img = fc.Box(parent, 0, 0, width, len, col, new Vector2(0.5f, 1f));
                 var rt = img.rectTransform;
-                rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0);
-                return img;
+                // Upper segments sit on a joint node (zero size); lower ones hang from the bottom of their parent segment.
+                rt.anchorMin = rt.anchorMax = atParentEnd ? new Vector2(0.5f, 0f) : new Vector2(0.5f, 0.5f);
+                rt.anchoredPosition = Vector2.zero;
+                parts.Add((img, col));
+                return rt;
+            }
+
+            (RectTransform, RectTransform) Arm(FightController fc, Transform torsoNode, float x, float y, Color upper, Color skin)
+            {
+                var shoulder = Node(torsoNode, "Shoulder", x, y);
+                var u = Segment(fc, shoulder, UpperArm, 18, upper, false);
+                var l = Segment(fc, u, LowerArm, 15, upper, true);
+                var fist = fc.Box(l, 0, 0, 24, 24, skin, new Vector2(0.5f, 0.5f), true);
+                fist.rectTransform.anchorMin = fist.rectTransform.anchorMax = new Vector2(0.5f, 0f);
+                fist.rectTransform.anchoredPosition = Vector2.zero;
+                parts.Add((fist, skin));
+                return (u, l);
+            }
+
+            (RectTransform, RectTransform) Leg(FightController fc, Transform pelvisNode, float x, Color upper, Color lower)
+            {
+                var hip = Node(pelvisNode, "Hip", x, 0);
+                var u = Segment(fc, hip, Thigh, 22, upper, false);
+                var l = Segment(fc, u, Shin, 18, lower, true);
+                var foot = fc.Box(l, 8, 0, 30, 11, Color.Lerp(lower, Color.black, 0.3f), new Vector2(0.5f, 0.5f));
+                foot.rectTransform.anchorMin = foot.rectTransform.anchorMax = new Vector2(0.5f, 0f);
+                foot.rectTransform.anchoredPosition = new Vector2(8, 0);
+                parts.Add((foot, foot.color));
+                return (u, l);
+            }
+
+            static float LegHeight(float u, float l) =>
+                Thigh * Mathf.Cos(u * Mathf.Deg2Rad) + Shin * Mathf.Cos((u + l) * Mathf.Deg2Rad);
+
+            Pose Target(Fighter2D f, float dt)
+            {
+                float time = Time.time;
+                var p = Pose.Guard;
+                float breathe = Mathf.Sin(time * 3f) * 3f;
+                p.aFu += breathe; p.aBu += breathe; p.lean += breathe * 0.3f;
+
+                switch (f.st)
+                {
+                    case FState.Walk:
+                    {
+                        // Leg swing driven by distance travelled; walking backwards plays the cycle in reverse.
+                        walkPhase += f.vx * f.face * 0.075f * dt * 60f;
+                        float s = Mathf.Sin(walkPhase), c = Mathf.Cos(walkPhase);
+                        p.lFu = 30 * s; p.lBu = -30 * s;
+                        p.lFl = -12 - 40 * Mathf.Max(0, -c);
+                        p.lBl = -12 - 40 * Mathf.Max(0, c);
+                        p.aFu -= 10 * s; p.aBu += 10 * s;
+                        p.lean = f.vx * f.face > 0 ? 10 : 2;
+                        break;
+                    }
+                    case FState.Crouch:
+                        p.lFu = 78; p.lFl = -125; p.lBu = 38; p.lBl = -118;
+                        p.lean = 22;
+                        break;
+                    case FState.Jump:
+                        if (f.vy > 2) { p.lFu = 70; p.lFl = -115; p.lBu = 30; p.lBl = -95; }
+                        else { p.lFu = 35; p.lFl = -45; p.lBu = -8; p.lBl = -35; }
+                        p.aFu = 115; p.aFl = 40; p.aBu = 95; p.aBl = 50;
+                        break;
+                    case FState.Charge:
+                    {
+                        float jitter = Mathf.Sin(time * 40) * 3;
+                        p.aFu = 150 + jitter; p.aFl = 20; p.aBu = 140 - jitter; p.aBl = 25;
+                        p.lean = -6; p.head = -15;
+                        p.lFu = 28; p.lFl = -12; p.lBu = -28; p.lBl = -10;
+                        break;
+                    }
+                    case FState.Block:
+                        p.aFu = 72; p.aFl = 118; p.aBu = 82; p.aBl = 108;
+                        p.lean = -4; p.head = 10;
+                        p.lFu = 34; p.lFl = -50; p.lBu = -22; p.lBl = -30;
+                        break;
+                    case FState.Hit:
+                        p.lean = -24; p.head = -22;
+                        p.aFu = -30; p.aFl = 35; p.aBu = -50; p.aBl = 25;
+                        p.lFu = -4; p.lFl = -10; p.lBu = -28; p.lBl = -8;
+                        break;
+                    case FState.Knockdown:
+                    case FState.Ko:
+                        p.lean = 0; p.head = -10;
+                        p.aFu = 165; p.aFl = 10; p.aBu = 150; p.aBl = 15;
+                        p.lFu = 8; p.lFl = -6; p.lBu = -6; p.lBl = -4;
+                        break;
+                    case FState.Win:
+                        p.aFu = 172; p.aFl = -12; p.aBu = -25; p.aBl = 115;
+                        p.lean = -5; p.head = -12;
+                        p.lFu = 20; p.lFl = -8; p.lBu = -20; p.lBl = -8;
+                        break;
+                    case FState.Attack:
+                        AttackPose(f, ref p);
+                        break;
+                }
+                return p;
+            }
+
+            static void AttackPose(Fighter2D f, ref Pose p)
+            {
+                var m = f.move;
+                if (m == null) return;
+                bool startup = f.t < m.startup;
+                bool active = !startup && f.t < m.startup + m.active;
+                float k = startup ? (float)f.t / Mathf.Max(1, m.startup) : 1f;
+
+                if (m == f.light)
+                {
+                    if (startup) { p.aFu = Mathf.Lerp(45, 30, k); p.aFl = Mathf.Lerp(95, 125, k); p.lean = 2; }
+                    else
+                    {
+                        p.aFu = 92; p.aFl = active ? 0 : 20;
+                        p.aBu = 10; p.aBl = 115; p.lean = 16; p.head = 5;
+                        p.lFu = 36; p.lFl = -32; p.lBu = -30; p.lBl = -6;
+                    }
+                }
+                else if (m == f.airLight)
+                {
+                    // Flying kick
+                    p.lFu = startup ? 60 : 95; p.lFl = startup ? -90 : -4;
+                    p.lBu = 40; p.lBl = -105;
+                    p.aFu = 60; p.aFl = 70; p.aBu = -20; p.aBl = 60; p.lean = -6;
+                }
+                else if (m == f.heavy)
+                {
+                    // Commands the stand: draw back, then point.
+                    if (startup) { p.aFu = Mathf.Lerp(45, -20, k); p.aFl = Mathf.Lerp(95, 120, k); p.lean = -4; }
+                    else { p.aFu = 96; p.aFl = -4; p.aBu = -35; p.aBl = 45; p.lean = 12; p.head = 6; }
+                    p.lFu = 36; p.lFl = -26; p.lBu = -36; p.lBl = -6;
+                }
+                else if (m == f.airHeavy)
+                {
+                    p.aFu = startup ? 165 : 70; p.aFl = startup ? 30 : 0;
+                    p.aBu = startup ? 155 : 60; p.aBl = startup ? 35 : 5;
+                    p.lFu = 60; p.lFl = -100; p.lBu = 25; p.lBl = -85; p.lean = startup ? -10 : 18;
+                }
+                else if (m.projectile)
+                {
+                    if (startup) { p.aFu = -40; p.aFl = 95; p.aBu = -50; p.aBl = 95; p.lean = -10; }
+                    else { p.aFu = 90; p.aFl = 0; p.aBu = 84; p.aBl = 4; p.lean = 14; }
+                    p.lFu = 40; p.lFl = -30; p.lBu = -38; p.lBl = -4;
+                }
+                else if (m.rush)
+                {
+                    float run = Time.time * 30;
+                    p.lean = startup ? 4 : 28;
+                    p.aFu = 85 + (active ? Mathf.Sin(run * 1.7f) * 12 : 0); p.aFl = 0;
+                    p.aBu = -40; p.aBl = 60;
+                    p.lFu = active ? 35 * Mathf.Sin(run) : 30; p.lBu = active ? -35 * Mathf.Sin(run) : -30;
+                    p.lFl = -30; p.lBl = -30;
+                }
             }
 
             public void Update(Fighter2D f)
             {
+                float dt = Time.unscaledDeltaTime;
                 rootRt.anchoredPosition = new Vector2(f.x, Ground + f.y);
                 float air = Mathf.Clamp01(f.y / 250f);
                 shadow.anchoredPosition = new Vector2(f.x, Ground);
                 shadow.localScale = new Vector3(1 - air * 0.5f, 1 - air * 0.5f, 1);
 
-                bool down = f.st == FState.Knockdown || f.st == FState.Ko;
-                float yScale = f.st == FState.Crouch ? 0.68f : 1f;
-                body.localScale = new Vector3(f.face, yScale, 1);
-                float rot = 0;
-                if (down) rot = f.Grounded ? 90 * f.face : 35 * f.face;
-                else if (f.st == FState.Hit) rot = 14 * f.face;
-                else if (f.st == FState.Block) rot = 6 * f.face;
-                body.localRotation = Quaternion.Euler(0, 0, rot);
+                // Blend toward the target pose; attacks snap faster so hits read clearly.
+                var target = Target(f, dt);
+                float speed = f.st == FState.Attack || f.st == FState.Hit ? 40f : 16f;
+                cur = Pose.Lerp(cur, target, 1f - Mathf.Exp(-speed * dt));
 
-                // Arm: punches reach out on light attacks; raised on victory.
-                float armW = 46, armAngle = 0;
-                var m = f.move;
-                if (f.st == FState.Attack && m != null && !m.stand)
-                {
-                    bool active = f.t >= m.startup && f.t < m.startup + m.active;
-                    armW = active ? m.reachX + m.w / 2 - 8 : 30;
-                    if (m.air) armAngle = -25;
-                }
-                if (f.st == FState.Win) armAngle = 70;
-                if (f.st == FState.Charge) armAngle = 40;
-                arm.sizeDelta = new Vector2(armW, 18);
-                arm.localRotation = Quaternion.Euler(0, 0, armAngle);
+                bool down = f.st == FState.Knockdown || f.st == FState.Ko;
+                body.localScale = new Vector3(f.face, 1, 1);
+                float rot = 0;
+                if (down) rot = f.Grounded ? 90 * f.face : 40 * f.face;
+                body.localRotation = Quaternion.Slerp(body.localRotation, Quaternion.Euler(0, 0, rot), 1f - Mathf.Exp(-14f * dt));
+
+                // Keep the feet on the ground: the hip height follows the longer leg.
+                float hipY = Mathf.Max(LegHeight(cur.lFu, cur.lFl), LegHeight(cur.lBu, cur.lBl));
+                pelvis.anchoredPosition = new Vector2(0, hipY);
+                torso.localRotation = Quaternion.Euler(0, 0, -cur.lean);
+                head.localRotation = Quaternion.Euler(0, 0, -cur.head);
+                aFu.localRotation = Quaternion.Euler(0, 0, cur.aFu);
+                aFl.localRotation = Quaternion.Euler(0, 0, cur.aFl);
+                aBu.localRotation = Quaternion.Euler(0, 0, cur.aBu);
+                aBl.localRotation = Quaternion.Euler(0, 0, cur.aBl);
+                lFu.localRotation = Quaternion.Euler(0, 0, cur.lFu);
+                lFl.localRotation = Quaternion.Euler(0, 0, cur.lFl);
+                lBu.localRotation = Quaternion.Euler(0, 0, cur.lBu);
+                lBl.localRotation = Quaternion.Euler(0, 0, cur.lBl);
 
                 // Flash white when hit.
-                var tc = f.flash > 0 ? Color.white : accent;
-                torso.color = tc;
-                head.color = f.flash > 0 ? Color.white : headCol;
-                legL.color = legR.color = f.flash > 0 ? Color.white : legCol;
+                bool flash = f.flash > 0;
+                foreach (var (img, col) in parts) img.color = flash ? Color.white : col;
 
                 shield.gameObject.SetActive(f.st == FState.Block);
 
                 // The stand: floats behind, lunges out on stand attacks, glows while charging.
+                var m = f.move;
                 Vector2 pos = new Vector2(-f.face * 55, 150);
                 float scale = 0.9f, alpha = 0.45f;
                 if (f.st == FState.Attack && m != null && m.stand)
@@ -672,9 +889,9 @@ namespace StandArena
                     bool active = f.t >= m.startup && f.t < m.startup + m.active;
                     float k = before ? (float)f.t / Mathf.Max(1, m.startup) : active ? 1f : 1f - (float)(f.t - m.startup - m.active) / Mathf.Max(1, m.recovery);
                     k = Mathf.Clamp01(k);
-                    var target = new Vector2(f.face * (m.reachX * 0.85f), m.reachY + 10);
-                    if (m.rush && active) target += UnityEngine.Random.insideUnitCircle * 12;
-                    pos = Vector2.Lerp(pos, target, k);
+                    var tpos = new Vector2(f.face * (m.reachX * 0.85f), m.reachY + 10);
+                    if (m.rush && active) tpos += UnityEngine.Random.insideUnitCircle * 12;
+                    pos = Vector2.Lerp(pos, tpos, k);
                     scale = Mathf.Lerp(0.9f, m.special ? 1.4f : 1.2f, k);
                     alpha = Mathf.Lerp(0.45f, 0.95f, k);
                 }
