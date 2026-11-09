@@ -90,6 +90,7 @@ namespace StandArena
         public string by = "local";   // "ai" or "local"
         public string name = "";
         public string reading = "";
+        public string origin = "";    // 名前の由来
         public string appearance = "";
         public string abilityName = "";
         public string ability = "";
@@ -116,6 +117,7 @@ namespace StandArena
             owner = Trim(owner, 24);
             name = Trim(name, 40);
             reading = Trim(reading, 40);
+            origin = Trim(origin, 80);
             appearance = Trim(appearance, 120);
             abilityName = Trim(abilityName, 24);
             ability = Trim(ability, 240);

@@ -290,6 +290,8 @@ namespace StandArena
             UIKit.Label(names, $"本体：{s.owner}", 20, Pal.Muted);
             UIKit.Label(names, s.name, 44, isEnemy ? Pal.Rose : Pal.Text, FontStyle.Bold);
             UIKit.Label(names, s.reading, 20, Pal.Muted);
+            if (!string.IsNullOrEmpty(s.origin))
+                UIKit.Label(names, $"名前の由来：{s.origin}", 18, Pal.Muted);
             UIKit.Label(names, $"TYPE {s.type}  ·  {Quiz.Describe(s.type)}", 18, Pal.Gold, FontStyle.Bold);
 
             void Section(string head, string body)
